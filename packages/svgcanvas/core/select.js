@@ -306,6 +306,16 @@ export class SelectorManager {
     this.rotateGripConnector = null
     this.rotateGrip = null
 
+    // Initialize guides group before other elements
+    this.guidesGroup = svgCanvas.createSVGElement({
+      element: 'g',
+      attr: {
+        id: 'guidesGroup',
+        style: 'pointer-events:none'
+      }
+    })
+    this.guides = []
+
     this.initGroup()
   }
 
@@ -325,6 +335,10 @@ export class SelectorManager {
       element: 'g',
       attr: { id: 'selectorParentGroup' }
     })
+
+    // Add guides group first so it appears under selection handles
+    this.selectorParentGroup.append(this.guidesGroup)
+
     this.selectorGripsGroup = svgCanvas.createSVGElement({
       element: 'g',
       attr: { display: 'none' }
@@ -418,6 +432,55 @@ export class SelectorManager {
     })
     canvasbg.append(rect)
     svgCanvas.getSvgRoot().insertBefore(canvasbg, svgCanvas.getSvgContent())
+  }
+
+  /**
+   * Clear all guide lines
+   */
+  clearGuides () {
+    while (this.guides.length) {
+      const guide = this.guides.pop()
+      guide.remove()
+    }
+    // Hide guides container when cleared
+    this.guidesGroup.setAttribute('display', 'none')
+  }
+
+  /**
+   * Show guide lines for snapping
+   * @param {Array} guides - Array of guide objects with type and position
+   */
+  showGuides (guides) {
+    this.clearGuides()
+
+    // Show guides container
+    this.guidesGroup.setAttribute('display', 'inline')
+
+    guides.forEach(guide => {
+      const line = svgCanvas.createSVGElement({
+        element: 'line',
+        attr: {
+          stroke: '#4F80FF',
+          'stroke-width': '2',
+          'stroke-dasharray': '5,5',
+          ...guide.type === 'vertical'
+            ? {
+                x1: guide.position,
+                y1: -10000,
+                x2: guide.position,
+                y2: 10000
+              }
+            : {
+                x1: -10000,
+                y1: guide.position,
+                x2: 10000,
+                y2: guide.position
+              }
+        }
+      })
+      this.guidesGroup.append(line)
+      this.guides.push(line)
+    })
   }
 
   /**

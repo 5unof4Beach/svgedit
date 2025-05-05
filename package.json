@@ -91,6 +91,7 @@
     "elix": "15.0.1",
     "i18next": "24.2.3",
     "jspdf": "3.0.1",
+    "konva": "^9.3.20",
     "pathseg": "1.2.1",
     "regenerator-runtime": "0.14.1",
     "replace-in-file": "^8.3.0",

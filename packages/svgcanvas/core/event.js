@@ -18,6 +18,7 @@ import * as draw from './draw.js'
 import * as pathModule from './path.js'
 import * as hstry from './history.js'
 import { findPos } from '../../svgcanvas/common/util.js'
+import { getSelectorManager } from './select.js'
 
 const {
   InsertElementCommand
@@ -25,6 +26,7 @@ const {
 
 let svgCanvas = null
 let moveSelectionThresholdReached = false
+let selectorManager_
 
 /**
 * @function module:undo.init
@@ -39,6 +41,7 @@ export const init = (canvas) => {
   svgCanvas.mouseUpEvent = mouseUpEvent
   svgCanvas.mouseOutEvent = mouseOutEvent
   svgCanvas.DOMMouseScrollEvent = DOMMouseScrollEvent
+  selectorManager_ = getSelectorManager()
 }
 
 const getBsplinePoint = (t) => {
@@ -93,6 +96,92 @@ const updateTransformList = (svgRoot, element, dx, dy) => {
     }
   } else {
     tlist.appendItem(xform)
+  }
+}
+
+/**
+ * Calculate snap points and guide lines for alignment
+ * @param {Element} selected - The element being moved
+ * @param {Float} dx - Proposed x movement
+ * @param {Float} dy - Proposed y movement
+ * @returns {{dx: Float, dy: Float, guides: Array}} Modified movement values and guide lines
+ */
+const calculateSnapping = (selected, dx, dy) => {
+  const SNAP_THRESHOLD = 5
+  const zoom = svgCanvas.getZoom()
+  const selectedBBox = getBBox(selected)
+
+  // Helper to get all snap points (edges and center) for a bbox
+  function getSnapPoints (bbox) {
+    return {
+      vertical: [
+        bbox.x, // left
+        bbox.x + bbox.width / 2, // center
+        bbox.x + bbox.width // right
+      ],
+      horizontal: [
+        bbox.y, // top
+        bbox.y + bbox.height / 2, // center
+        bbox.y + bbox.height // bottom
+      ]
+    }
+  }
+
+  // Get snap points for the selected element (after move)
+  const selSnap = getSnapPoints({
+    x: selectedBBox.x + dx,
+    y: selectedBBox.y + dy,
+    width: selectedBBox.width,
+    height: selectedBBox.height
+  })
+
+  // Gather all possible snap points from other elements
+  const layer = svgCanvas.getCurrentDrawing().getCurrentLayer()
+  const otherElements = Array.from(layer.children).filter((el, i) => el !== selected && i !== 0 && el.nodeType === 1)
+  const allVertical = [0, layer.ownerSVGElement.viewBox.baseVal.width / zoom / 2, layer.ownerSVGElement.viewBox.baseVal.width / zoom]
+  const allHorizontal = [0, layer.ownerSVGElement.viewBox.baseVal.height / zoom / 2, layer.ownerSVGElement.viewBox.baseVal.height / zoom]
+
+  otherElements.forEach((el) => {
+    const bbox = getBBox(el)
+    const pts = getSnapPoints(bbox)
+    allVertical.push(...pts.vertical)
+    allHorizontal.push(...pts.horizontal)
+  })
+
+  // Find closest snap for each axis
+  let minDiffX = SNAP_THRESHOLD
+  let minDiffY = SNAP_THRESHOLD
+  let snapDX = dx
+  let snapDY = dy
+  let guides = []
+
+  selSnap.vertical.forEach((selX) => {
+    allVertical.forEach((guideX) => {
+      const diff = Math.abs(selX - guideX)
+      if (diff < minDiffX) {
+        minDiffX = diff
+        snapDX = guideX - (selectedBBox.x + (selX - (selectedBBox.x + dx)))
+        guides = guides.filter(g => g.type !== 'vertical')
+        guides.push({ type: 'vertical', position: guideX * zoom })
+      }
+    })
+  })
+  selSnap.horizontal.forEach((selY) => {
+    allHorizontal.forEach((guideY) => {
+      const diff = Math.abs(selY - guideY)
+      if (diff < minDiffY) {
+        minDiffY = diff
+        snapDY = guideY - (selectedBBox.y + (selY - (selectedBBox.y + dy)))
+        guides = guides.filter(g => g.type !== 'horizontal')
+        guides.push({ type: 'horizontal', position: guideY * zoom })
+      }
+    })
+  })
+
+  return {
+    dx: snapDX,
+    dy: snapDY,
+    guides
   }
 }
 
@@ -163,9 +252,15 @@ const mouseMoveEvent = (evt) => {
         moveSelectionThresholdReached = moveSelectionThresholdReached || deltaThresholdReached
 
         if (moveSelectionThresholdReached) {
-          selectedElements.forEach((el) => {
+          selectedElements.forEach((el, i) => {
             if (el) {
-              updateTransformList(svgRoot, el, dx, dy)
+              const snap = calculateSnapping(el, dx, dy)
+
+              // Add guide lines
+              if (snap.guides.length) {
+                selectorManager_.showGuides(snap.guides)
+              }
+              updateTransformList(svgRoot, el, snap.dx, snap.dy)
               // update our internal bbox that we're tracking while dragging
               svgCanvas.selectorManager.requestSelector(el).resize()
             }
@@ -571,6 +666,9 @@ const mouseOutEvent = () => {
 */
 const mouseUpEvent = (evt) => {
   evt.preventDefault()
+
+  selectorManager_.clearGuides()
+
   moveSelectionThresholdReached = false
   if (evt.button === 2) { return }
   if (!svgCanvas.getStarted()) { return }
@@ -662,9 +760,18 @@ const mouseUpEvent = (evt) => {
         const elem = selectedElements[0]
         if (elem) {
           elem.removeAttribute('style')
-          walkTree(elem, (el) => {
-            el.removeAttribute('style')
-          })
+
+          // we don't remove the style elements for contents of foreignObjects
+          // because that is a valid way to style them
+          if (elem.localName === 'foreignObject') {
+            walkTree(elem, (el) => {
+              el.style.removeProperty('pointer-events')
+            })
+          } else {
+            walkTree(elem, (el) => {
+              el.removeAttribute('style')
+            })
+          }
         }
       }
       return
